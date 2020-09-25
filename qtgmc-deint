@@ -1,0 +1,56 @@
+#!/bin/bash
+#
+# requirements:
+#  - vapoursynth installed
+#  - havsfunc python script installed somewhere in PYTHONPATH (with dependencies)
+#
+
+function print_usage {
+  echo "usage: qtgmc-deint <source file> <output.mkv>"
+  echo ""
+  echo "the output file will be in prores standard 4:2:2 10-bit and it will be overwritten if necessary."
+}
+
+if (($# < 2)); then
+  print_usage
+  exit 1
+fi
+
+srcfile="$1"
+dstfile="$2"
+
+if [[ ! -e "$srcfile" ]]; then
+  echo "source file doesnt exist at path: $srcfile"
+  exit 1
+fi
+
+# using mov here for compatibility in davinci resolve; drawback
+# here is previewing the file as it encodes is not really possible
+# since the moov atom hasn't been written yet.
+#if [[ ! "$dstfile" = *.mov ]]; then
+#  echo "destination file must be a .mov file (you wanted $dstfile)"
+#  exit 1
+#fi
+
+srcfile_fullpath=$(realpath $srcfile)
+
+# vspipe does not support scripts passed as stdin
+vs_script_tmp=$(mktemp --suffix .vpy)
+echo "tmp file made $vs_script_tmp"
+
+echo -n "
+from vapoursynth import core
+import havsfunc as haf
+
+video = core.ffms2.Source(source=infile)
+video = haf.QTGMC(video, Preset='Medium', TFF=True)
+video.set_output()
+" > $vs_script_tmp
+
+LD_LIBRARY_PATH=/usr/local/lib \
+PYTHONPATH=/usr/local/lib/python3.8/site-packages:/opt/vapoursynth/lib/python3/dist-packages/vsscripts \
+nice \
+  vspipe --y4m --arg "infile=$srcfile_fullpath" "$vs_script_tmp" - | \
+#  ffmpeg -i "$srcfile" -i pipe: -map_metadata -1 -map 1 -map 0:a? -c:a copy -c:v prores -y "$dstfile"
+  ffmpeg -i "$srcfile" -i pipe: -map_metadata -1 -map 1 -map 0:a? -c:a libfdk_aac -ar 44.1k -b:a 128k -aspect 16:9 -c:v hevc_nvenc -pix_fmt p010le -profile:v main10 -preset p7 -rc vbr -cq 26 -y "$dstfile"
+rm "$vs_script_tmp"
